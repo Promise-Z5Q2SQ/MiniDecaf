@@ -3,12 +3,33 @@
  */
 package minidecaf;
 
+import org.antlr.v4.runtime.*;
+import org.antlr.v4.runtime.tree.ParseTree;
+
 import java.io.FileWriter;
 
 public class Main {
     public static void main(String[] args) throws Exception {
-        try (var writer = new FileWriter(args[1])) {
-            writer.write(new Compiler().run());
+        //检验输入输出文件是否完整
+        if (args.length != 2 || args[0].equals("-h") || args[0].equals("--help")) {
+            System.out.println("Usage: minidecaf <input minidecaf file> <output riscv assembly file>\n");
+            return;
         }
+        // input file --- lexer ---> tokens
+        CharStream inputCharStream = CharStreams.fromFileName(args[0]);
+        MiniDecafLexer lexer = new MiniDecafLexer(inputCharStream);
+        CommonTokenStream tokenStream = new CommonTokenStream(lexer);
+        // tokens --- parser ---> tree
+        MiniDecafParser parser = new MiniDecafParser(tokenStream);
+        parser.setErrorHandler(new BailErrorStrategy()); // 输入错误直接退出
+        ParseTree tree = parser.program();
+        StringBuilder stringBuilder = new StringBuilder();
+        // tree --- visitor ---> riscv assembly
+        MainVisitor visitor = new MainVisitor(stringBuilder);
+        visitor.visit(tree);
+
+        FileWriter writer = new FileWriter(args[1]);
+        writer.write(stringBuilder.toString());
+        writer.close();
     }
 }

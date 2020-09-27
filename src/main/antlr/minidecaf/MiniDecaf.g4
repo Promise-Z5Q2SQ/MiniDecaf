@@ -1,9 +1,9 @@
 grammar MiniDecaf;
 
-prog:
-	func EOF;
+program:
+	function EOF;
 
-func: type IDENT '(' ')' '{' stmt '}';
+function: type IDENT '(' ')' '{' stmt '}';
 
 type: 'int';
 
@@ -12,7 +12,7 @@ stmt: 'return' expr ';';
 expr: NUM;
 
 /* lexer */
-WS: [ \t\r\n\u000C] -> skip;
+WS: [ \t\r\n\u000C] -> skip; //空白
 
 // comment
 // The specification of minidecaf doesn't allow commenting,
@@ -20,5 +20,5 @@ WS: [ \t\r\n\u000C] -> skip;
 COMMENT: '/*' .*? '*/' -> skip;
 LINE_COMMENT: '//' ~[\r\n]* -> skip;
 
-IDENT: [a-zA-Z_] [a-zA-Z_0-9]*;
+IDENT: [a-zA-Z_] [a-zA-Z_0-9]*; //合法函数名
 NUM: [0-9]+;
