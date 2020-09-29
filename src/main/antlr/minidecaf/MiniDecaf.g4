@@ -1,7 +1,6 @@
 grammar MiniDecaf;
 
-program:
-	function EOF;
+program: function EOF;
 
 function: type IDENT '(' ')' '{' stmt '}';
 

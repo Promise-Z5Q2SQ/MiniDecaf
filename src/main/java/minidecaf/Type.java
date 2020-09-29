@@ -1,11 +1,5 @@
 package minidecaf;
 
-/**
- * MiniDecaf 的类型（无类型、整型）
- *
- * @author  Namasikanam
- * @since   2020-09-11
- */
 public abstract class Type {
     private final String name;
 
