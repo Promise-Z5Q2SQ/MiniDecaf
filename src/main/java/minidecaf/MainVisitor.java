@@ -42,19 +42,37 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
     public Type visitStmt(MiniDecafParser.StmtContext ctx) {
         visit(ctx.expr());
         // 函数返回，返回值存在 a0 中
+        stackPop("a0");
         stringBuilder.append("\tret\n");
         return null;
     }
 
     @Override
     public Type visitExpr(MiniDecafParser.ExprContext ctx) {
-        TerminalNode num = ctx.NUM();
-        BigInteger bigInteger = new BigInteger(num.getText());
-        BigInteger maxInteger = new BigInteger(String.valueOf(Integer.MAX_VALUE));
-        // 检验数字字面量不能超过整型的最大值
-        if (maxInteger.compareTo(bigInteger) <= 0)
-            reportError("too large number", ctx);
-        stringBuilder.append("\tli a0, ").append(num.getText()).append("\n");
+        visit(ctx.unary());
+        return null;
+    }
+
+    @Override
+    public Type visitUnary(MiniDecafParser.UnaryContext ctx) {
+        if (ctx.children.size() == 1) {
+            TerminalNode num = ctx.NUM();
+            BigInteger bigInteger = new BigInteger(num.getText());
+            BigInteger maxInteger = new BigInteger(String.valueOf(Integer.MAX_VALUE));
+            // 检验数字字面量不能超过整型的最大值
+            if (maxInteger.compareTo(bigInteger) <= 0)
+                reportError("too large number", ctx);
+            stringBuilder.append("\tli t0, ").append(num.getText()).append("\n");
+        } else { //执行一元运算
+            visit(ctx.unary()); //递归循环
+            stackPop("t0");
+            switch (ctx.children.get(0).getText()) {
+                case "-" -> stringBuilder.append("\tneg t0, t0\n");
+                case "~" -> stringBuilder.append("\tnot t0, t0\n");
+                case "!" -> stringBuilder.append("\tseqz t0, t0\n");
+            }
+        }
+        stackPush("t0");
         return null;
     }
 
@@ -68,5 +86,25 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
         throw new RuntimeException("Error("
                 + ctx.getStart().getLine() + ", "
                 + ctx.getStart().getCharPositionInLine() + "): " + s + ".\n");
+    }
+
+    /**
+     * 将寄存器的值压入栈中。
+     *
+     * @param reg 待压栈的寄存器
+     */
+    private void stackPush(String reg) {
+        stringBuilder.append("\taddi sp, sp, -4\n");
+        stringBuilder.append("\tsw ").append(reg).append(", 0(sp)\n");
+    }
+
+    /**
+     * 将栈顶的值弹出到寄存器中。
+     *
+     * @param reg 用于存储栈顶值的寄存器
+     */
+    private void stackPop(String reg) {
+        stringBuilder.append("\tlw ").append(reg).append(", 0(sp)\n");
+        stringBuilder.append("\taddi sp, sp, 4\n");
     }
 }
