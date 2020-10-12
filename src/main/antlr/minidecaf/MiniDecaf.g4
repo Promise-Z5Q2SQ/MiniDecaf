@@ -2,15 +2,21 @@ grammar MiniDecaf;
 
 program: function EOF;
 
-function: type IDENT '(' ')' '{' stmt '}';
+function: type IDENT '(' ')' '{' statement '}';
 
 type: 'int';
 
-stmt: 'return' expr ';';
+statement: 'return' expression ';';
 
-expr: unary;
+expression: additive;
 
-unary: NUM | ('-'|'!'|'~') unary;
+additive: multiplicative | additive ('+'|'-') additive;
+
+multiplicative: unary | multiplicative ('*'|'/'|'%') multiplicative;
+
+unary: primary | ('-'|'!'|'~') unary;
+
+primary: NUM | '(' expression ')';
 
 /* lexer */
 WS: [ \t\r\n\u000C] -> skip; //空白

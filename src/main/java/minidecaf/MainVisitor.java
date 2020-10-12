@@ -28,7 +28,7 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
         stringBuilder.append("\t.text\n");// 表示以下内容在 text 段中
         stringBuilder.append("\t.global ").append(ident).append("\n"); // 让该 label 对链接器可见
         stringBuilder.append(ident).append(":\n");
-        visit(ctx.stmt());
+        visit(ctx.statement());
         return null;
     }
 
@@ -39,8 +39,8 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
     }
 
     @Override
-    public Type visitStmt(MiniDecafParser.StmtContext ctx) {
-        visit(ctx.expr());
+    public Type visitStatement(MiniDecafParser.StatementContext ctx) {
+        visit(ctx.expression());
         // 函数返回，返回值存在 a0 中
         stackPop("a0");
         stringBuilder.append("\tret\n");
@@ -48,13 +48,70 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
     }
 
     @Override
-    public Type visitExpr(MiniDecafParser.ExprContext ctx) {
-        visit(ctx.unary());
+    public Type visitExpression(MiniDecafParser.ExpressionContext ctx) {
+        visit(ctx.additive());
+        return null;
+    }
+
+    @Override
+    public Type visitAdditive(MiniDecafParser.AdditiveContext ctx) {
+        if (ctx.children.size() > 1) {
+            visit(ctx.additive(0));
+            visit(ctx.additive(1));
+            // 将加法和减法的操作数存入寄存器
+            stackPop("t1");
+            stackPop("t0");
+            switch (ctx.children.get(1).getText()) {
+                case "+" -> stringBuilder.append("\tadd t0, t0, t1\n");
+                case "-" -> stringBuilder.append("\tsub t0, t0, t1\n");
+            }
+            // 将运算结果存回栈中
+            stackPush("t0");
+        } else {
+            visit(ctx.multiplicative());
+        }
+        return null;
+    }
+
+    @Override
+    public Type visitMultiplicative(MiniDecafParser.MultiplicativeContext ctx) {
+        // 与加减操作基本相同
+        if (ctx.children.size() > 1) {
+            visit(ctx.multiplicative(0));
+            visit(ctx.multiplicative(1));
+            stackPop("t1");
+            stackPop("t0");
+            switch (ctx.children.get(1).getText()) {
+                case "*" -> stringBuilder.append("\tmul t0, t0, t1\n");
+                case "/" -> stringBuilder.append("\tdiv t0, t0, t1\n");
+                case "%" -> stringBuilder.append("\trem t0, t0, t1\n");
+            }
+            stackPush("t0");
+        } else {
+            visit(ctx.unary());
+        }
         return null;
     }
 
     @Override
     public Type visitUnary(MiniDecafParser.UnaryContext ctx) {
+        if (ctx.children.size() > 1) {
+            visit(ctx.unary()); //递归循环
+            stackPop("t0");
+            switch (ctx.children.get(0).getText()) {
+                case "-" -> stringBuilder.append("\tneg t0, t0\n");
+                case "~" -> stringBuilder.append("\tnot t0, t0\n");
+                case "!" -> stringBuilder.append("\tseqz t0, t0\n");
+            }
+            stackPush("t0");
+        } else {
+            visit(ctx.primary());
+        }
+        return null;
+    }
+
+    @Override
+    public Type visitPrimary(MiniDecafParser.PrimaryContext ctx) {
         if (ctx.children.size() == 1) {
             TerminalNode num = ctx.NUM();
             BigInteger bigInteger = new BigInteger(num.getText());
@@ -63,16 +120,10 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
             if (maxInteger.compareTo(bigInteger) <= 0)
                 reportError("too large number", ctx);
             stringBuilder.append("\tli t0, ").append(num.getText()).append("\n");
-        } else { //执行一元运算
-            visit(ctx.unary()); //递归循环
-            stackPop("t0");
-            switch (ctx.children.get(0).getText()) {
-                case "-" -> stringBuilder.append("\tneg t0, t0\n");
-                case "~" -> stringBuilder.append("\tnot t0, t0\n");
-                case "!" -> stringBuilder.append("\tseqz t0, t0\n");
-            }
+            stackPush("t0");
+        } else {
+            visit(ctx.expression());
         }
-        stackPush("t0");
         return null;
     }
 
