@@ -8,11 +8,19 @@ type: 'int';
 
 statement: 'return' expression ';';
 
-expression: additive;
+expression: logical_or;
 
-additive: multiplicative | additive ('+'|'-') additive;
+logical_or: logical_and | logical_or '||' logical_and;
 
-multiplicative: unary | multiplicative ('*'|'/'|'%') multiplicative;
+logical_and: equality | logical_and '&&' equality;
+
+equality: relational | equality ('=='|'!=') relational;
+
+relational: additive | relational ('<'|'>'|'<='|'>=') additive;
+
+additive: multiplicative | additive ('+'|'-') multiplicative;
+
+multiplicative: unary | multiplicative ('*'|'/'|'%') unary;
 
 unary: primary | ('-'|'!'|'~') unary;
 

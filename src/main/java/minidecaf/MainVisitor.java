@@ -49,15 +49,83 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
 
     @Override
     public Type visitExpression(MiniDecafParser.ExpressionContext ctx) {
-        visit(ctx.additive());
+        visit(ctx.logical_or());
+        return null;
+    }
+
+    @Override
+    public Type visitLogical_or(MiniDecafParser.Logical_orContext ctx) {
+        if (ctx.children.size() > 1) {
+            visit(ctx.logical_or());
+            visit(ctx.logical_and());
+            stackPop("t1");
+            stackPop("t0");
+            stringBuilder.append("\tsnez t0, t0\n").append("\tsnez t1, t1\n").append("\tor t0, t0, t1\n");
+            stackPush("t0");
+        } else {
+            visit(ctx.logical_and());
+        }
+        return null;
+    }
+
+    @Override
+    public Type visitLogical_and(MiniDecafParser.Logical_andContext ctx) {
+        if (ctx.children.size() > 1) {
+            visit(ctx.logical_and());
+            visit(ctx.equality());
+            stackPop("t1");
+            stackPop("t0");
+            stringBuilder.append("\tsnez t0, t0\n").append("\tsnez t1, t1\n").append("\tand t0, t0, t1\n");
+            stackPush("t0");
+        } else {
+            visit(ctx.equality());
+        }
+        return null;
+    }
+
+    @Override
+    public Type visitEquality(MiniDecafParser.EqualityContext ctx) {
+        if (ctx.children.size() > 1) {
+            visit(ctx.equality());
+            visit(ctx.relational());
+            stackPop("t1");
+            stackPop("t0");
+            switch (ctx.children.get(1).getText()) {
+                case "==" -> stringBuilder.append("\tsub t0, t0, t1\n").append("\tseqz t0, t0\n");
+                case "!=" -> stringBuilder.append("\tsub t0, t0, t1\n").append("\tsnez t0, t0\n");
+            }
+            stackPush("t0");
+        } else {
+            visit(ctx.relational());
+        }
+        return null;
+    }
+
+    @Override
+    public Type visitRelational(MiniDecafParser.RelationalContext ctx) {
+        if (ctx.children.size() > 1) {
+            visit(ctx.relational());
+            visit(ctx.additive());
+            stackPop("t1");
+            stackPop("t0");
+            switch (ctx.children.get(1).getText()) {
+                case "<" -> stringBuilder.append("\tslt t0, t0, t1\n");
+                case ">" -> stringBuilder.append("\tsgt t0, t0, t1\n").append("\tsnez t0, t0\n");
+                case "<=" -> stringBuilder.append("\tsgt t0, t0, t1\n").append("\txori t0, t0, 1\n");
+                case ">=" -> stringBuilder.append("\tslt t0, t0, t1\n").append("\txori t0, t0, 1\n");
+            }
+            stackPush("t0");
+        } else {
+            visit(ctx.additive());
+        }
         return null;
     }
 
     @Override
     public Type visitAdditive(MiniDecafParser.AdditiveContext ctx) {
         if (ctx.children.size() > 1) {
-            visit(ctx.additive(0));
-            visit(ctx.additive(1));
+            visit(ctx.additive());
+            visit(ctx.multiplicative());
             // 将加法和减法的操作数存入寄存器
             stackPop("t1");
             stackPop("t0");
@@ -77,8 +145,8 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
     public Type visitMultiplicative(MiniDecafParser.MultiplicativeContext ctx) {
         // 与加减操作基本相同
         if (ctx.children.size() > 1) {
-            visit(ctx.multiplicative(0));
-            visit(ctx.multiplicative(1));
+            visit(ctx.multiplicative());
+            visit(ctx.unary());
             stackPop("t1");
             stackPop("t0");
             switch (ctx.children.get(1).getText()) {

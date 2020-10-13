@@ -9,9 +9,9 @@
 ```
 expression: additive;
 
-additive: multiplicative | additive ('+'|'-') additive;
+additive: multiplicative | additive ('+'|'-') multiplicative;
 
-multiplicative: unary | multiplicative ('*'|'/'|'%') multiplicative;
+multiplicative: unary | multiplicative ('*'|'/'|'%') unary;
 
 unary: primary | ('-'|'!'|'~') unary;
 
@@ -20,9 +20,7 @@ primary: NUM | '(' expression ')';
 
 在代码中对以上新出现的每个非终结符增加了 `visit` 函数，按照其各自子节点的数目来分类讨论。
 
-在涉及到运算优先级的问题上，由于一元运算符优先级最高，所以最先和数字结合，并在整个表达式中占最底层，其次是乘除法，最后是加减法。
-
-要求规范是子表达式求值顺序是不确定的， 例如执行 `int a=0; (a=1)+(a=a+1);` 之后 a 的值是不确定的，所以在 `additive` 和 `multiplicative` 的产生式中，由相同的两个元素递归，而不是可以消除二义性的写法。
+在涉及到运算优先级的问题上，由于一元运算符优先级最高，所以最先和数字结合，并在整个表达式中占最底层，其次是乘除法，最后是加减法。在同级运算中又是遵循从左到右的顺序，所以将优先结合左边的表达式。
 
 ## 思考题
 
