@@ -4,10 +4,16 @@ import org.antlr.v4.runtime.ParserRuleContext;
 import org.antlr.v4.runtime.tree.TerminalNode;
 
 import java.math.BigInteger;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Optional;
 
 public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
     private final StringBuilder stringBuilder; // 生成的目标汇编代码
-    private boolean containsMain = false; //标志是否有主函数
+    private boolean containsMain = false; // 标志是否有主函数
+    private String currentFunction; // 当前函数
+    private int localCount; // 局部变量计数
+    private Map<String, Symbol> symbolTable = new HashMap<>(); // 符号表
 
     MainVisitor(StringBuilder stringBuilder) {
         this.stringBuilder = stringBuilder;
@@ -23,33 +29,94 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
     @Override
     public Type visitFunction(MiniDecafParser.FunctionContext ctx) {
         visit(ctx.type());
-        String ident = ctx.IDENT().getText();
-        if (ident.equals("main")) containsMain = true; // 出现主函数即记录
+        currentFunction = ctx.IDENT().getText();
+        if (currentFunction.equals("main")) containsMain = true; // 出现主函数即记录
         stringBuilder.append("\t.text\n");// 表示以下内容在 text 段中
-        stringBuilder.append("\t.global ").append(ident).append("\n"); // 让该 label 对链接器可见
-        stringBuilder.append(ident).append(":\n");
-        visit(ctx.statement());
+        stringBuilder.append("\t.global ").append(currentFunction).append("\n"); // 让该 label 对链接器可见
+        stringBuilder.append(currentFunction).append(":\n");
+        // construct prologue
+        stackPush("ra");
+        stackPush("fp");
+        stringBuilder.append("\tmv fp, sp\n");
+        int backtracePosition = stringBuilder.length();
+        localCount = 0;
+        for (var statement : ctx.statement())
+            visit(statement);
+        // 在没有返回语句的情况下，我们默认取 return 0
+        stringBuilder.append("\tli t1, 0\n").append("\taddi sp, sp, -4\n").append("\tsw t1, 0(sp)\n");
+        // 根据局部变量的数量，回填所需的栈空间
+        stringBuilder.insert(backtracePosition, "\taddi sp, sp, " + (-4 * localCount) + "\n");
+        // construct epilogue
+        stringBuilder.append(".exit.").append(currentFunction).append(":\n\tlw a0, 0(sp)\n").append("\tmv sp, fp\n");
+        stackPop("fp");
+        stackPop("ra");
+        stringBuilder.append("\tret\n\n");
         return null;
     }
 
     @Override
     public Type visitType(MiniDecafParser.TypeContext ctx) {
-        if (!ctx.getText().equals("int")) reportError("return class error", ctx);
+        if (!ctx.getText().equals("int")) reportError("class error", ctx);
         return null;
     }
 
     @Override
-    public Type visitStatement(MiniDecafParser.StatementContext ctx) {
+    public Type visitReturnStatement(MiniDecafParser.ReturnStatementContext ctx) {
         visit(ctx.expression());
-        // 函数返回，返回值存在 a0 中
-        stackPop("a0");
-        stringBuilder.append("\tret\n");
+        stringBuilder.append("\tj .exit.").append(currentFunction).append("\n");
+        return null;
+    }
+
+    @Override
+    public Type visitExpressionStatement(MiniDecafParser.ExpressionStatementContext ctx) {
+        var expr = ctx.expression();
+        if (expr != null) {
+            visit(ctx.expression());
+            stackPop("t0");
+        }
+        return null;
+    }
+
+    @Override
+    public Type visitDeclarationStatement(MiniDecafParser.DeclarationStatementContext ctx) {
+        visit(ctx.type());
+        String name = ctx.IDENT().getText();
+        if (symbolTable.get(name) != null) // 若重复声明则报错
+            reportError("try declaring a declared variable", ctx);
+        symbolTable.put(name, new Symbol(name, -4 * ++localCount, new Type.IntType()));// 否则加入符号表
+        var expr = ctx.expression();
+        if (expr != null) {
+            visit(expr);
+            stackPop("t0");
+            stringBuilder.append("\tsw t0, ").append(-4 * localCount).append("(fp)\n");
+        }
         return null;
     }
 
     @Override
     public Type visitExpression(MiniDecafParser.ExpressionContext ctx) {
-        visit(ctx.logical_or());
+        visit(ctx.assignment());
+        return null;
+    }
+
+    @Override
+    public Type visitAssignment(MiniDecafParser.AssignmentContext ctx) {
+        if (ctx.children.size() > 1) {
+            String name = ctx.IDENT().getText();
+            Optional<Symbol> optionSymbol = lookupSymbol(name);
+            if (optionSymbol.isPresent()) {
+                visit(ctx.expression());
+                Symbol symbol = optionSymbol.get();
+                stackPop("t0");
+                stringBuilder.append("\tsw t0, ").append(symbol.offset).append("(fp)\n");
+                stackPush("t0");
+                return symbol.type;
+            } else {
+                reportError("use variable that is not defined", ctx);
+            }
+        } else {
+            visit(ctx.logical_or());
+        }
         return null;
     }
 
@@ -179,18 +246,34 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
     }
 
     @Override
-    public Type visitPrimary(MiniDecafParser.PrimaryContext ctx) {
-        if (ctx.children.size() == 1) {
-            TerminalNode num = ctx.NUM();
-            BigInteger bigInteger = new BigInteger(num.getText());
-            BigInteger maxInteger = new BigInteger(String.valueOf(Integer.MAX_VALUE));
-            // 检验数字字面量不能超过整型的最大值
-            if (maxInteger.compareTo(bigInteger) <= 0)
-                reportError("too large number", ctx);
-            stringBuilder.append("\tli t0, ").append(num.getText()).append("\n");
+    public Type visitNumberPrimary(MiniDecafParser.NumberPrimaryContext ctx) {
+        TerminalNode num = ctx.NUM();
+        BigInteger bigInteger = new BigInteger(num.getText());
+        BigInteger maxInteger = new BigInteger(String.valueOf(Integer.MAX_VALUE));
+        // 检验数字字面量不能超过整型的最大值
+        if (maxInteger.compareTo(bigInteger) <= 0)
+            reportError("too large number", ctx);
+        stringBuilder.append("\tli t0, ").append(num.getText()).append("\n");
+        stackPush("t0");
+        return null;
+    }
+
+    @Override
+    public Type visitParenthesizedPrimary(MiniDecafParser.ParenthesizedPrimaryContext ctx) {
+        return visit(ctx.expression());
+    }
+
+    @Override
+    public Type visitIdentPrimary(MiniDecafParser.IdentPrimaryContext ctx) {
+        String name = ctx.IDENT().getText();
+        Optional<Symbol> optionSymbol = lookupSymbol(name);
+        if (optionSymbol.isPresent()) {
+            Symbol symbol = optionSymbol.get();
+            stringBuilder.append("\tlw t0, ").append(symbol.offset).append("(fp)\n");
             stackPush("t0");
+            return symbol.type;
         } else {
-            visit(ctx.expression());
+            reportError("use variable that is not defined", ctx);
         }
         return null;
     }
@@ -225,5 +308,17 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
     private void stackPop(String reg) {
         stringBuilder.append("\tlw ").append(reg).append(", 0(sp)\n");
         stringBuilder.append("\taddi sp, sp, 4\n");
+    }
+
+    /**
+     * 查询符号表
+     *
+     * @param v 被查询的变量名
+     */
+    private Optional<Symbol> lookupSymbol(String v) {
+        if (symbolTable.containsKey(v))
+            return Optional.of(symbolTable.get(v));
+        else
+            return Optional.empty();
     }
 }

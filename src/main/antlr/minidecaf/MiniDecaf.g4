@@ -2,13 +2,18 @@ grammar MiniDecaf;
 
 program: function EOF;
 
-function: type IDENT '(' ')' '{' statement '}';
+function: type IDENT '(' ')' '{' statement* '}';
 
 type: 'int';
 
-statement: 'return' expression ';';
+statement: 'return' expression ';' #returnStatement
+    | expression? ';' #expressionStatement
+    | type IDENT ('=' expression)? ';' #declarationStatement
+    ;
 
-expression: logical_or;
+expression : assignment;
+
+assignment : logical_or | IDENT '=' expression;
 
 logical_or: logical_and | logical_or '||' logical_and;
 
@@ -24,7 +29,10 @@ multiplicative: unary | multiplicative ('*'|'/'|'%') unary;
 
 unary: primary | ('-'|'!'|'~') unary;
 
-primary: NUM | '(' expression ')';
+primary: NUM #numberPrimary
+    | '(' expression ')' #parenthesizedPrimary
+    | IDENT #identPrimary
+    ;
 
 /* lexer */
 WS: [ \t\r\n\u000C] -> skip; //空白
