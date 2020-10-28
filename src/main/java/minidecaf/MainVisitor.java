@@ -14,6 +14,7 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
     private String currentFunction; // 当前函数
     private int localCount; // 局部变量计数
     private Map<String, Symbol> symbolTable = new HashMap<>(); // 符号表
+    private int condNo = 0; // 用于给条件语句和条件表达式所用的标签编号
 
     MainVisitor(StringBuilder stringBuilder) {
         this.stringBuilder = stringBuilder;
@@ -40,7 +41,7 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
         stringBuilder.append("\tmv fp, sp\n");
         int backtracePosition = stringBuilder.length();
         localCount = 0;
-        for (var statement : ctx.statement())
+        for (var statement : ctx.blockitem())
             visit(statement);
         // 在没有返回语句的情况下，我们默认取 return 0
         stringBuilder.append("\tli t1, 0\n").append("\taddi sp, sp, -4\n").append("\tsw t1, 0(sp)\n");
@@ -57,6 +58,22 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
     @Override
     public Type visitType(MiniDecafParser.TypeContext ctx) {
         if (!ctx.getText().equals("int")) reportError("class error", ctx);
+        return null;
+    }
+
+    @Override
+    public Type visitDeclaration(MiniDecafParser.DeclarationContext ctx) {
+        visit(ctx.type());
+        String name = ctx.IDENT().getText();
+        if (symbolTable.get(name) != null) // 若重复声明则报错
+            reportError("try declaring a declared variable", ctx);
+        symbolTable.put(name, new Symbol(name, -4 * ++localCount, new Type.IntType()));// 否则加入符号表
+        var expr = ctx.expression();
+        if (expr != null) {
+            visit(expr);
+            stackPop("t0");
+            stringBuilder.append("\tsw t0, ").append(-4 * localCount).append("(fp)\n");
+        }
         return null;
     }
 
@@ -78,18 +95,17 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
     }
 
     @Override
-    public Type visitDeclarationStatement(MiniDecafParser.DeclarationStatementContext ctx) {
-        visit(ctx.type());
-        String name = ctx.IDENT().getText();
-        if (symbolTable.get(name) != null) // 若重复声明则报错
-            reportError("try declaring a declared variable", ctx);
-        symbolTable.put(name, new Symbol(name, -4 * ++localCount, new Type.IntType()));// 否则加入符号表
-        var expr = ctx.expression();
-        if (expr != null) {
-            visit(expr);
-            stackPop("t0");
-            stringBuilder.append("\tsw t0, ").append(-4 * localCount).append("(fp)\n");
-        }
+    public Type visitIfStatement(MiniDecafParser.IfStatementContext ctx) {
+        int currentCondNo = condNo++;
+        visit(ctx.expression());
+        stackPop("t0");
+        stringBuilder.append("\tbeqz t0, .else").append(currentCondNo).append("\n"); // 根据条件表达式的值判断是否要直接跳转至 else 分支
+        visit(ctx.statement(0));
+        stringBuilder.append("\tj .afterCondition").append(currentCondNo).append("\n"); // 在 then 分支结束后直接跳至分支语句末尾
+        stringBuilder.append(".else").append(currentCondNo).append(":\n"); // 标记 else 分支开始部分的 label
+        if (ctx.statement().size() > 1)
+            visit(ctx.statement(1));
+        stringBuilder.append(".afterCondition").append(currentCondNo).append(":\n");
         return null;
     }
 
@@ -114,6 +130,24 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
             } else {
                 reportError("use variable that is not defined", ctx);
             }
+        } else {
+            visit(ctx.conditional());
+        }
+        return null;
+    }
+
+    @Override
+    public Type visitConditional(MiniDecafParser.ConditionalContext ctx) {
+        if (ctx.children.size() > 1) {
+            int currentCondNo = condNo++;
+            visit(ctx.logical_or());
+            stackPop("t0");
+            stringBuilder.append("\tbeqz t0, .else").append(currentCondNo).append("\n"); // 根据条件表达式判断是否要跳转至 else 分支
+            visit(ctx.expression());
+            stringBuilder.append("\tj .afterCondition").append(currentCondNo).append("\n"); // 在 then 分支结束后直接跳至分支语句末尾
+            stringBuilder.append(".else").append(currentCondNo).append(":\n"); // 在 else 分支结束后直接跳至分支语句末尾
+            visit(ctx.conditional());
+            stringBuilder.append(".afterCondition").append(currentCondNo).append(":\n");
         } else {
             visit(ctx.logical_or());
         }

@@ -2,18 +2,24 @@ grammar MiniDecaf;
 
 program: function EOF;
 
-function: type IDENT '(' ')' '{' statement* '}';
+function: type IDENT '(' ')' '{' blockitem* '}';
 
 type: 'int';
 
+blockitem: statement | declaration;
+
+declaration: type IDENT ('=' expression)?;
+
 statement: 'return' expression ';' #returnStatement
     | expression? ';' #expressionStatement
-    | type IDENT ('=' expression)? ';' #declarationStatement
+    | 'if' '(' expression ')' statement ('else' statement)? # ifStatement
     ;
 
-expression : assignment;
+expression: assignment;
 
-assignment : logical_or | IDENT '=' expression;
+assignment : conditional | IDENT '=' expression;
+
+conditional: logical_or | logical_or '?' expression ':' conditional;
 
 logical_or: logical_and | logical_or '||' logical_and;
 
