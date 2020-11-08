@@ -2,9 +2,11 @@ grammar MiniDecaf;
 
 program: function EOF;
 
-function: type IDENT '(' ')' '{' blockitem* '}';
+function: type IDENT '(' ')' compound_statement;
 
 type: 'int';
+
+compound_statement: '{' blockitem* '}';
 
 blockitem: statement | declaration;
 
@@ -12,7 +14,8 @@ declaration: type IDENT ('=' expression)?;
 
 statement: 'return' expression ';' #returnStatement
     | expression? ';' #expressionStatement
-    | 'if' '(' expression ')' statement ('else' statement)? # ifStatement
+    | 'if' '(' expression ')' statement ('else' statement)? #ifStatement
+    | compound_statement #defaultStatement
     ;
 
 expression: assignment;

@@ -7,14 +7,15 @@ import java.math.BigInteger;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Stack;
 
 public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
     private final StringBuilder stringBuilder; // 生成的目标汇编代码
     private boolean containsMain = false; // 标志是否有主函数
     private String currentFunction; // 当前函数
     private int localCount; // 局部变量计数
-    private Map<String, Symbol> symbolTable = new HashMap<>(); // 符号表
-    private int condNo = 0; // 用于给条件语句和条件表达式所用的标签编号
+    private Stack<Map<String, Symbol>> symbolTable = new Stack<>(); // 符号表
+    private int condCount = 0; // 用于给条件语句和条件表达式所用的标签编号
 
     MainVisitor(StringBuilder stringBuilder) {
         this.stringBuilder = stringBuilder;
@@ -41,8 +42,9 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
         stringBuilder.append("\tmv fp, sp\n");
         int backtracePosition = stringBuilder.length();
         localCount = 0;
-        for (var statement : ctx.blockitem())
-            visit(statement);
+        symbolTable.add(new HashMap<>()); // 为函数开启新的作用域
+        visit(ctx.compound_statement());
+        symbolTable.pop(); // 删除函数作用域的符号表
         // 在没有返回语句的情况下，我们默认取 return 0
         stringBuilder.append("\tli t1, 0\n").append("\taddi sp, sp, -4\n").append("\tsw t1, 0(sp)\n");
         // 根据局部变量的数量，回填所需的栈空间
@@ -62,12 +64,19 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
     }
 
     @Override
+    public Type visitCompound_statement(MiniDecafParser.Compound_statementContext ctx) {
+        for (var blockItem : ctx.blockitem())
+            visit(blockItem);
+        return null;
+    }
+
+    @Override
     public Type visitDeclaration(MiniDecafParser.DeclarationContext ctx) {
         visit(ctx.type());
         String name = ctx.IDENT().getText();
-        if (symbolTable.get(name) != null) // 若重复声明则报错
+        if (symbolTable.peek().get(name) != null) // 若重复声明则报错
             reportError("try declaring a declared variable", ctx);
-        symbolTable.put(name, new Symbol(name, -4 * ++localCount, new Type.IntType()));// 否则加入符号表
+        symbolTable.peek().put(name, new Symbol(name, -4 * ++localCount, new Type.IntType()));// 否则加入符号表
         var expr = ctx.expression();
         if (expr != null) {
             visit(expr);
@@ -96,7 +105,7 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
 
     @Override
     public Type visitIfStatement(MiniDecafParser.IfStatementContext ctx) {
-        int currentCondNo = condNo++;
+        int currentCondNo = condCount++;
         visit(ctx.expression());
         stackPop("t0");
         stringBuilder.append("\tbeqz t0, .else").append(currentCondNo).append("\n"); // 根据条件表达式的值判断是否要直接跳转至 else 分支
@@ -106,6 +115,14 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
         if (ctx.statement().size() > 1)
             visit(ctx.statement(1));
         stringBuilder.append(".afterCondition").append(currentCondNo).append(":\n");
+        return null;
+    }
+
+    @Override
+    public Type visitDefaultStatement(MiniDecafParser.DefaultStatementContext ctx) {
+        symbolTable.add(new HashMap<>()); // 创建新的符号表
+        visit(ctx.compound_statement());
+        symbolTable.pop(); // 删除该作用域新的符号表
         return null;
     }
 
@@ -139,7 +156,7 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
     @Override
     public Type visitConditional(MiniDecafParser.ConditionalContext ctx) {
         if (ctx.children.size() > 1) {
-            int currentCondNo = condNo++;
+            int currentCondNo = condCount++;
             visit(ctx.logical_or());
             stackPop("t0");
             stringBuilder.append("\tbeqz t0, .else").append(currentCondNo).append("\n"); // 根据条件表达式判断是否要跳转至 else 分支
@@ -345,14 +362,16 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
     }
 
     /**
-     * 查询符号表
+     * 优先从内层开始查询符号表
      *
      * @param v 被查询的变量名
      */
     private Optional<Symbol> lookupSymbol(String v) {
-        if (symbolTable.containsKey(v))
-            return Optional.of(symbolTable.get(v));
-        else
-            return Optional.empty();
+        for (int i = symbolTable.size() - 1; i >= 0; --i) {
+            var map = symbolTable.elementAt(i);
+            if (map.containsKey(v))
+                return Optional.of(map.get(v));
+        }
+        return Optional.empty();
     }
 }
