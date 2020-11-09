@@ -16,6 +16,11 @@ statement: 'return' expression ';' #returnStatement
     | expression? ';' #expressionStatement
     | 'if' '(' expression ')' statement ('else' statement)? #ifStatement
     | compound_statement #defaultStatement
+    | 'for' '(' (declaration | expression?) ';' expression? ';' expression? ')' statement #forStatement
+    | 'while' '(' expression ')' statement #whileStatement
+    | 'do' statement 'while' '(' expression ')' ';' #doWhileStatement
+    | 'break' ';' #breakStatement
+    | 'continue' ';' #continueStatement
     ;
 
 expression: assignment;

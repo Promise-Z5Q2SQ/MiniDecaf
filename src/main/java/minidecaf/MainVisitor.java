@@ -16,6 +16,8 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
     private int localCount; // 局部变量计数
     private Stack<Map<String, Symbol>> symbolTable = new Stack<>(); // 符号表
     private int condCount = 0; // 用于给条件语句和条件表达式所用的标签编号
+    private int loopCount = 0; // 用于给循环语句所用的标签编号
+    private Stack<Integer> currentLoop = new Stack<>(); // 当前位置的循环标签编号
 
     MainVisitor(StringBuilder stringBuilder) {
         this.stringBuilder = stringBuilder;
@@ -98,7 +100,7 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
         var expr = ctx.expression();
         if (expr != null) {
             visit(ctx.expression());
-            stackPop("t0");
+            stringBuilder.append("\taddi sp, sp, 4\n");
         }
         return null;
     }
@@ -123,6 +125,97 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
         symbolTable.add(new HashMap<>()); // 创建新的符号表
         visit(ctx.compound_statement());
         symbolTable.pop(); // 删除该作用域新的符号表
+        return null;
+    }
+
+    @Override
+    public Type visitForStatement(MiniDecafParser.ForStatementContext ctx) {
+        int currentLoop = loopCount++;
+        // for 循环里的表达式均可能为空，故这里先把各个表达式照出来
+        MiniDecafParser.ExpressionContext init = null;
+        MiniDecafParser.ExpressionContext ctrl = null;
+        MiniDecafParser.ExpressionContext post = null;
+        for (int i = 0; i < ctx.children.size(); ++i)
+            if (ctx.children.get(i) instanceof MiniDecafParser.ExpressionContext) {
+                if (ctx.children.get(i - 1).getText().equals("("))
+                    init = (MiniDecafParser.ExpressionContext) (ctx.children.get(i));
+                else if (ctx.children.get(i + 1).getText().equals(";"))
+                    ctrl = (MiniDecafParser.ExpressionContext) (ctx.children.get(i));
+                else
+                    post = (MiniDecafParser.ExpressionContext) (ctx.children.get(i));
+            }
+        symbolTable.add(new HashMap<>()); // 开启一个新的作用域
+        if (ctx.declaration() != null)
+            visit(ctx.declaration());
+        else if (init != null) {
+            visit(init);
+            stringBuilder.append("\taddi sp, sp, 4\n");
+        }
+        stringBuilder.append(".beforeLoop").append(currentLoop).append(":\n");
+        if (ctrl != null) {
+            visit(ctrl);
+            stringBuilder.append("\tlw t1, 0(sp)\n").append("\taddi sp, sp, 4\n").append("\tbeqz t1, .afterLoop").append(currentLoop).append("\n");
+        }
+        this.currentLoop.push(currentLoop);
+        symbolTable.add(new HashMap<>()); // 开启一个新的作用域
+        visit(ctx.statement()); // 访问循环体
+        symbolTable.pop(); // 清空当前作用域符号表
+        this.currentLoop.pop();
+        stringBuilder.append(".continueLoop").append(currentLoop).append(":\n"); // continue 指令需要跳转到这里
+        if (post != null) {
+            visit(post);
+            stringBuilder.append("\taddi sp, sp, 4\n");
+        }
+        symbolTable.pop(); // 清空当前作用域符号表
+        stringBuilder.append("\tj .beforeLoop").append(currentLoop).append("\n")
+                .append(".afterLoop").append(currentLoop).append(":\n");
+        return null;
+    }
+
+    @Override
+    public Type visitWhileStatement(MiniDecafParser.WhileStatementContext ctx) {
+        int currentLoop = loopCount++;
+        stringBuilder.append(".beforeLoop").append(currentLoop).append(":\n").
+                append(".continueLoop").append(currentLoop).append(":\n"); // continue 指令需要跳转到这里
+        visit(ctx.expression());
+        stackPop("t0");
+        stringBuilder.append("\tbeqz t0, .afterLoop").append(currentLoop).append("\n");
+        this.currentLoop.push(currentLoop);
+        visit(ctx.statement()); // 访问循环体
+        this.currentLoop.pop();
+        stringBuilder.append("\tj .beforeLoop").append(currentLoop).append("\n").
+                append(".afterLoop").append(currentLoop).append(":\n");
+        return null;
+    }
+
+    @Override
+    public Type visitDoWhileStatement(MiniDecafParser.DoWhileStatementContext ctx) {
+        int currentLoop = loopCount++;
+        stringBuilder.append(".beforeLoop").append(currentLoop).append(":\n");
+        this.currentLoop.push(currentLoop);
+        visit(ctx.statement()); // 访问循环体
+        this.currentLoop.pop();
+        stringBuilder.append(".continueLoop").append(currentLoop).append(":\n"); // continue 指令需要跳转到这里
+        visit(ctx.expression());
+        stackPop("t0");
+        stringBuilder.append("\tbnez t0, .beforeLoop").append(currentLoop).append("\n").
+                append(".afterLoop").append(currentLoop).append(":\n");
+        return null;
+    }
+
+    @Override
+    public Type visitBreakStatement(MiniDecafParser.BreakStatementContext ctx) {
+        if (currentLoop.isEmpty())
+            reportError("break statement not within loop", ctx);
+        stringBuilder.append("\tj .afterLoop").append(currentLoop.peek()).append("\n");
+        return null;
+    }
+
+    @Override
+    public Type visitContinueStatement(MiniDecafParser.ContinueStatementContext ctx) {
+        if (currentLoop.isEmpty())
+            reportError("continue statement not within loop", ctx);
+        stringBuilder.append("\tj .continueLoop").append(currentLoop.peek()).append("\n");
         return null;
     }
 
