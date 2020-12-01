@@ -46,7 +46,7 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
         FunctionType functionType = new FunctionType(returnType, paramTypes);
         if (declaredFunctionTable.get(currentFunction) != null && !declaredFunctionTable.get(currentFunction).equals(functionType))
             reportError("the number of parameters of the defined function is not the same as declared", ctx);
-        // declaredFunctionTable.put(currentFunction, functionType); TODO
+        declaredFunctionTable.put(currentFunction, functionType);
         definedFunctionTable.put(currentFunction, functionType);
         // construct prologue
         stackPush("ra");
