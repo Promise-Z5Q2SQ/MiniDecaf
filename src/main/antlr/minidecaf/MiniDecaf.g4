@@ -1,8 +1,10 @@
 grammar MiniDecaf;
 
-program: function EOF;
+program: function* EOF;
 
-function: type IDENT '(' ')' compound_statement;
+function: type IDENT '(' (type IDENT (',' type IDENT)*)? ')' compound_statement #defineFunction
+    | type IDENT '(' (type IDENT (',' type IDENT)*)? ')' ';' #declareFunction
+    ;
 
 type: 'int';
 
@@ -41,7 +43,9 @@ additive: multiplicative | additive ('+'|'-') multiplicative;
 
 multiplicative: unary | multiplicative ('*'|'/'|'%') unary;
 
-unary: primary | ('-'|'!'|'~') unary;
+unary: postfix | ('-'|'!'|'~') unary;
+
+postfix: primary | IDENT '(' (expression (',' expression)*)? ')';
 
 primary: NUM #numberPrimary
     | '(' expression ')' #parenthesizedPrimary

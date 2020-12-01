@@ -4,20 +4,19 @@ import org.antlr.v4.runtime.ParserRuleContext;
 import org.antlr.v4.runtime.tree.TerminalNode;
 
 import java.math.BigInteger;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Optional;
-import java.util.Stack;
+import java.util.*;
 
 public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
     private final StringBuilder stringBuilder; // 生成的目标汇编代码
     private boolean containsMain = false; // 标志是否有主函数
     private String currentFunction; // 当前函数
     private int localCount; // 局部变量计数
-    private Stack<Map<String, Symbol>> symbolTable = new Stack<>(); // 符号表
+    private final Stack<Map<String, Symbol>> symbolTable = new Stack<>(); // 符号表
     private int condCount = 0; // 用于给条件语句和条件表达式所用的标签编号
     private int loopCount = 0; // 用于给循环语句所用的标签编号
-    private Stack<Integer> currentLoop = new Stack<>(); // 当前位置的循环标签编号
+    private final Stack<Integer> currentLoop = new Stack<>(); // 当前位置的循环标签编号
+    private final Map<String, FunctionType> declaredFunctionTable = new HashMap<>(); // 已声明函数表
+    private final Map<String, FunctionType> definedFunctionTable = new HashMap<>(); // 已定义函数表
 
     MainVisitor(StringBuilder stringBuilder) {
         this.stringBuilder = stringBuilder;
@@ -25,19 +24,30 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
 
     @Override
     public Type visitProgram(MiniDecafParser.ProgramContext ctx) {
-        visit(ctx.function());
+        for (var function : ctx.function())
+            visit(function);
         if (!containsMain) reportError("no main function", ctx);
-        return null;
+        return new Type.NoType();
     }
 
     @Override
-    public Type visitFunction(MiniDecafParser.FunctionContext ctx) {
-        visit(ctx.type());
-        currentFunction = ctx.IDENT().getText();
+    public Type visitDefineFunction(MiniDecafParser.DefineFunctionContext ctx) {
+        Type returnType = visit(ctx.type(0));
+        currentFunction = ctx.IDENT(0).getText();
         if (currentFunction.equals("main")) containsMain = true; // 出现主函数即记录
         stringBuilder.append("\t.text\n");// 表示以下内容在 text 段中
         stringBuilder.append("\t.global ").append(currentFunction).append("\n"); // 让该 label 对链接器可见
         stringBuilder.append(currentFunction).append(":\n");
+        if (definedFunctionTable.get(currentFunction) != null)
+            reportError("duplicate definition", ctx);
+        List<Type> paramTypes = new ArrayList<>();
+        for (int i = 1; i < ctx.type().size(); ++i)
+            paramTypes.add(visit(ctx.type(i)));
+        FunctionType functionType = new FunctionType(returnType, paramTypes);
+        if (declaredFunctionTable.get(currentFunction) != null && !declaredFunctionTable.get(currentFunction).equals(functionType))
+            reportError("the number of parameters of the defined function is not the same as declared", ctx);
+        // declaredFunctionTable.put(currentFunction, functionType); TODO
+        definedFunctionTable.put(currentFunction, functionType);
         // construct prologue
         stackPush("ra");
         stackPush("fp");
@@ -45,7 +55,20 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
         int backtracePosition = stringBuilder.length();
         localCount = 0;
         symbolTable.add(new HashMap<>()); // 为函数开启新的作用域
-        visit(ctx.compound_statement());
+        // 将函数的参数作为局部变量取出，这里参数的存储方式遵循 riscv gcc 的调用约定
+        for (int i = 1; i < ctx.IDENT().size(); ++i) {
+            String parameterName = ctx.IDENT().get(i).getText();
+            if (symbolTable.peek().get(parameterName) != null)
+                reportError("two parameters have the same name", ctx);
+            if (i < 9) { // 前8个参数使用寄存器a0-a7储存
+                localCount++;
+                stringBuilder.append("\tsw a").append(i - 1).append(", ").append(-4 * i).append("(fp)\n");
+                symbolTable.peek().put(parameterName, new Symbol(parameterName, -4 * i, functionType.parameterTypes.get(i - 1)));
+            } else { // 剩余参数位于内存中，ra前
+                symbolTable.peek().put(parameterName, new Symbol(parameterName, 4 * (i - 9 + 2), functionType.parameterTypes.get(i - 1)));
+            }
+        }
+        visit(ctx.compound_statement()); // 函数体
         symbolTable.pop(); // 删除函数作用域的符号表
         // 在没有返回语句的情况下，我们默认取 return 0
         stringBuilder.append("\tli t1, 0\n").append("\taddi sp, sp, -4\n").append("\tsw t1, 0(sp)\n");
@@ -56,20 +79,35 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
         stackPop("fp");
         stackPop("ra");
         stringBuilder.append("\tret\n\n");
-        return null;
+        return new Type.NoType();
+    }
+
+    @Override
+    public Type visitDeclareFunction(MiniDecafParser.DeclareFunctionContext ctx) {
+        Type returnType = visit(ctx.type(0));
+        String functionName = ctx.IDENT(0).getText();
+        List<Type> paramTypes = new ArrayList<>();
+        for (int i = 1; i < ctx.type().size(); ++i)
+            paramTypes.add(visit(ctx.type(i)));
+        FunctionType functionType = new FunctionType(returnType, paramTypes);
+
+        if (declaredFunctionTable.get(functionName) != null && !declaredFunctionTable.get(functionName).equals(functionType))
+            reportError("declare a function with different parameters", ctx);
+        declaredFunctionTable.put(functionName, functionType);
+        return new Type.NoType();
     }
 
     @Override
     public Type visitType(MiniDecafParser.TypeContext ctx) {
         if (!ctx.getText().equals("int")) reportError("class error", ctx);
-        return null;
+        return new Type.IntType();
     }
 
     @Override
     public Type visitCompound_statement(MiniDecafParser.Compound_statementContext ctx) {
         for (var blockItem : ctx.blockitem())
             visit(blockItem);
-        return null;
+        return new Type.NoType();
     }
 
     @Override
@@ -85,14 +123,14 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
             stackPop("t0");
             stringBuilder.append("\tsw t0, ").append(-4 * localCount).append("(fp)\n");
         }
-        return null;
+        return new Type.NoType();
     }
 
     @Override
     public Type visitReturnStatement(MiniDecafParser.ReturnStatementContext ctx) {
         visit(ctx.expression());
         stringBuilder.append("\tj .exit.").append(currentFunction).append("\n");
-        return null;
+        return new Type.NoType();
     }
 
     @Override
@@ -102,7 +140,7 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
             visit(ctx.expression());
             stringBuilder.append("\taddi sp, sp, 4\n");
         }
-        return null;
+        return new Type.NoType();
     }
 
     @Override
@@ -117,7 +155,7 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
         if (ctx.statement().size() > 1)
             visit(ctx.statement(1));
         stringBuilder.append(".afterCondition").append(currentCondNo).append(":\n");
-        return null;
+        return new Type.NoType();
     }
 
     @Override
@@ -125,7 +163,7 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
         symbolTable.add(new HashMap<>()); // 创建新的符号表
         visit(ctx.compound_statement());
         symbolTable.pop(); // 删除该作用域新的符号表
-        return null;
+        return new Type.NoType();
     }
 
     @Override
@@ -169,7 +207,7 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
         symbolTable.pop(); // 清空当前作用域符号表
         stringBuilder.append("\tj .beforeLoop").append(currentLoop).append("\n")
                 .append(".afterLoop").append(currentLoop).append(":\n");
-        return null;
+        return new Type.NoType();
     }
 
     @Override
@@ -185,7 +223,7 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
         this.currentLoop.pop();
         stringBuilder.append("\tj .beforeLoop").append(currentLoop).append("\n").
                 append(".afterLoop").append(currentLoop).append(":\n");
-        return null;
+        return new Type.NoType();
     }
 
     @Override
@@ -200,7 +238,7 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
         stackPop("t0");
         stringBuilder.append("\tbnez t0, .beforeLoop").append(currentLoop).append("\n").
                 append(".afterLoop").append(currentLoop).append(":\n");
-        return null;
+        return new Type.NoType();
     }
 
     @Override
@@ -208,7 +246,7 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
         if (currentLoop.isEmpty())
             reportError("break statement not within loop", ctx);
         stringBuilder.append("\tj .afterLoop").append(currentLoop.peek()).append("\n");
-        return null;
+        return new Type.NoType();
     }
 
     @Override
@@ -216,13 +254,12 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
         if (currentLoop.isEmpty())
             reportError("continue statement not within loop", ctx);
         stringBuilder.append("\tj .continueLoop").append(currentLoop.peek()).append("\n");
-        return null;
+        return new Type.NoType();
     }
 
     @Override
     public Type visitExpression(MiniDecafParser.ExpressionContext ctx) {
-        visit(ctx.assignment());
-        return null;
+        return visit(ctx.assignment());
     }
 
     @Override
@@ -239,11 +276,11 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
                 return symbol.type;
             } else {
                 reportError("use variable that is not defined", ctx);
+                return new Type.NoType();
             }
         } else {
-            visit(ctx.conditional());
+            return visit(ctx.conditional());
         }
-        return null;
     }
 
     @Override
@@ -258,10 +295,10 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
             stringBuilder.append(".else").append(currentCondNo).append(":\n"); // 在 else 分支结束后直接跳至分支语句末尾
             visit(ctx.conditional());
             stringBuilder.append(".afterCondition").append(currentCondNo).append(":\n");
+            return new Type.IntType();
         } else {
-            visit(ctx.logical_or());
+            return visit(ctx.logical_or());
         }
-        return null;
     }
 
     @Override
@@ -273,10 +310,10 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
             stackPop("t0");
             stringBuilder.append("\tsnez t0, t0\n").append("\tsnez t1, t1\n").append("\tor t0, t0, t1\n");
             stackPush("t0");
+            return new Type.IntType();
         } else {
-            visit(ctx.logical_and());
+            return visit(ctx.logical_and());
         }
-        return null;
     }
 
     @Override
@@ -288,10 +325,10 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
             stackPop("t0");
             stringBuilder.append("\tsnez t0, t0\n").append("\tsnez t1, t1\n").append("\tand t0, t0, t1\n");
             stackPush("t0");
+            return new Type.IntType();
         } else {
-            visit(ctx.equality());
+            return visit(ctx.equality());
         }
-        return null;
     }
 
     @Override
@@ -306,10 +343,10 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
                 case "!=" -> stringBuilder.append("\tsub t0, t0, t1\n").append("\tsnez t0, t0\n");
             }
             stackPush("t0");
+            return new Type.IntType();
         } else {
-            visit(ctx.relational());
+            return visit(ctx.relational());
         }
-        return null;
     }
 
     @Override
@@ -326,10 +363,10 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
                 case ">=" -> stringBuilder.append("\tslt t0, t0, t1\n").append("\txori t0, t0, 1\n");
             }
             stackPush("t0");
+            return new Type.IntType();
         } else {
-            visit(ctx.additive());
+            return visit(ctx.additive());
         }
-        return null;
     }
 
     @Override
@@ -346,10 +383,10 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
             }
             // 将运算结果存回栈中
             stackPush("t0");
+            return new Type.IntType();
         } else {
-            visit(ctx.multiplicative());
+            return visit(ctx.multiplicative());
         }
-        return null;
     }
 
     @Override
@@ -366,10 +403,10 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
                 case "%" -> stringBuilder.append("\trem t0, t0, t1\n");
             }
             stackPush("t0");
+            return new Type.IntType();
         } else {
-            visit(ctx.unary());
+            return visit(ctx.unary());
         }
-        return null;
     }
 
     @Override
@@ -383,10 +420,32 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
                 case "!" -> stringBuilder.append("\tseqz t0, t0\n");
             }
             stackPush("t0");
+            return new Type.IntType();
         } else {
-            visit(ctx.primary());
+            return visit(ctx.postfix());
         }
-        return null;
+    }
+
+    @Override
+    public Type visitPostfix(MiniDecafParser.PostfixContext ctx) {
+        if (ctx.children.size() > 1) {
+            String functionName = ctx.IDENT().getText();
+            if (declaredFunctionTable.get(functionName) == null)
+                reportError("call undeclared function", ctx);
+            FunctionType functionType = declaredFunctionTable.get(functionName);
+            if (functionType.parameterTypes.size() != ctx.expression().size())
+                reportError("parameters matching error", ctx);
+            // 这里参数的调用方式遵循 riscv gcc 的调用约定
+            for (int i = ctx.expression().size() - 1; i >= 0; i--) {
+                visit(ctx.expression().get(i));
+                if (i < 8) stackPop("a" + i); // 前8个参数使用寄存器a0-a7传递，其余直接存在内存中
+            }
+            stringBuilder.append("\tcall ").append(functionName).append("\n"); // 调用函数
+            stackPush("a0"); // 函数的返回值存储在a0中
+            return new Type.IntType();
+        } else {
+            return visit(ctx.primary());
+        }
     }
 
     @Override
@@ -399,7 +458,7 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
             reportError("too large number", ctx);
         stringBuilder.append("\tli t0, ").append(num.getText()).append("\n");
         stackPush("t0");
-        return null;
+        return new Type.IntType();
     }
 
     @Override
@@ -418,8 +477,8 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
             return symbol.type;
         } else {
             reportError("use variable that is not defined", ctx);
+            return new Type.IntType();
         }
-        return null;
     }
 
     /**
