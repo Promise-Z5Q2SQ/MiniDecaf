@@ -1,6 +1,6 @@
 grammar MiniDecaf;
 
-program: function* EOF;
+program: (function | global)* EOF;
 
 function: type IDENT '(' (type IDENT (',' type IDENT)*)? ')' compound_statement #defineFunction
     | type IDENT '(' (type IDENT (',' type IDENT)*)? ')' ';' #declareFunction
@@ -13,6 +13,8 @@ compound_statement: '{' blockitem* '}';
 blockitem: statement | declaration;
 
 declaration: type IDENT ('=' expression)?;
+
+global: type IDENT ('=' NUM)? ';';
 
 statement: 'return' expression ';' #returnStatement
     | expression? ';' #expressionStatement
