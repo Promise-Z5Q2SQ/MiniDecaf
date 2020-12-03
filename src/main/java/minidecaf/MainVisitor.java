@@ -74,7 +74,7 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
                 localCount++;
                 stringBuilder.append("\tsw a").append(i - 1).append(", ").append(-4 * i).append("(fp)\n");
                 symbolTable.peek().put(parameterName, new Symbol(parameterName, -4 * i, functionType.parameterTypes.get(i - 1)));
-            } else { // 剩余参数位于内存中，ra前
+            } else { // 剩余参数位于内存中，ra 前
                 symbolTable.peek().put(parameterName, new Symbol(parameterName, 4 * (i - 9 + 2), functionType.parameterTypes.get(i - 1)));
             }
         }
