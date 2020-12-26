@@ -24,7 +24,7 @@ statement: 'return' expression ';'                                              
     | expression? ';'                                                                       #expressionStatement
     | 'if' '(' expression ')' statement ('else' statement)?                                 #ifStatement
     | compound_statement                                                                    #defaultStatement
-    | 'for' '(' (declaration | expression?) ';' expression? ';' expression? ')' statement   #forStatement
+    | 'for' '(' (declaration | expression? ';') expression? ';' expression? ')' statement   #forStatement
     | 'while' '(' expression ')' statement                                                  #whileStatement
     | 'do' statement 'while' '(' expression ')' ';'                                         #doWhileStatement
     | 'break' ';'                                                                           #breakStatement
