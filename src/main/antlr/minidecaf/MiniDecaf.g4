@@ -3,7 +3,7 @@ grammar MiniDecaf;
 program: (function | global)* EOF;
 
 function: type IDENT '(' (type IDENT (',' type IDENT)*)? ')' compound_statement #defineFunction
-    | type IDENT '(' (type IDENT (',' type IDENT)*)? ')' ';' #declareFunction
+    | type IDENT '(' (type IDENT (',' type IDENT)*)? ')' ';'                    #declareFunction
     ;
 
 type: 'int' '*'*;
@@ -12,19 +12,23 @@ compound_statement: '{' blockitem* '}';
 
 blockitem: statement | declaration;
 
-declaration: type IDENT ('=' expression)? ';';
+declaration: type IDENT ('=' expression)? ';'   # localIntOrPointerDecl
+    | type IDENT ('[' NUM ']')+ ';'	            # localArrayDecl
+    ;
 
-global: type IDENT ('=' NUM)? ';';
+global: type IDENT ('=' NUM)? ';'	# globalIntOrPointerDecl
+    | type IDENT ('[' NUM ']')+ ';'	# globalArrayDecl
+    ;
 
-statement: 'return' expression ';' #returnStatement
-    | expression? ';' #expressionStatement
-    | 'if' '(' expression ')' statement ('else' statement)? #ifStatement
-    | compound_statement #defaultStatement
-    | 'for' '(' (declaration | expression?) ';' expression? ';' expression? ')' statement #forStatement
-    | 'while' '(' expression ')' statement #whileStatement
-    | 'do' statement 'while' '(' expression ')' ';' #doWhileStatement
-    | 'break' ';' #breakStatement
-    | 'continue' ';' #continueStatement
+statement: 'return' expression ';'                                                          #returnStatement
+    | expression? ';'                                                                       #expressionStatement
+    | 'if' '(' expression ')' statement ('else' statement)?                                 #ifStatement
+    | compound_statement                                                                    #defaultStatement
+    | 'for' '(' (declaration | expression?) ';' expression? ';' expression? ')' statement   #forStatement
+    | 'while' '(' expression ')' statement                                                  #whileStatement
+    | 'do' statement 'while' '(' expression ')' ';'                                         #doWhileStatement
+    | 'break' ';'                                                                           #breakStatement
+    | 'continue' ';'                                                                        #continueStatement
     ;
 
 expression: assignment;
@@ -46,15 +50,19 @@ additive: multiplicative | additive ('+'|'-') multiplicative;
 multiplicative: unary | multiplicative ('*'|'/'|'%') unary;
 
 unary:
-	('-' | '~' | '!' | '&' | '*') unary	# operatorUnary
-	| '(' type ')' unary # castUnary
-	| postfix # postfixUnary;
+	('-' | '~' | '!' | '&' | '*') unary # operatorUnary
+	| '(' type ')' unary                # castUnary
+	| postfix                           # postfixUnary;
 
-postfix: primary | IDENT '(' (expression (',' expression)*)? ')';
+postfix:
+	IDENT '(' (expression (',' expression)*)? ')'   # functionPostfix
+	| postfix '[' expression ']'                    # arrayPostfix
+	| primary                                       # primaryPostfix
+	;
 
-primary: NUM #numberPrimary
-    | '(' expression ')' #parenthesizedPrimary
-    | IDENT #identPrimary
+primary: NUM                #numberPrimary
+    | '(' expression ')'    #parenthesizedPrimary
+    | IDENT                 #identPrimary
     ;
 
 /* lexer */
