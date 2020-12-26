@@ -6,13 +6,13 @@ function: type IDENT '(' (type IDENT (',' type IDENT)*)? ')' compound_statement 
     | type IDENT '(' (type IDENT (',' type IDENT)*)? ')' ';' #declareFunction
     ;
 
-type: 'int';
+type: 'int' '*'*;
 
 compound_statement: '{' blockitem* '}';
 
 blockitem: statement | declaration;
 
-declaration: type IDENT ('=' expression)?;
+declaration: type IDENT ('=' expression)? ';';
 
 global: type IDENT ('=' NUM)? ';';
 
@@ -29,7 +29,7 @@ statement: 'return' expression ';' #returnStatement
 
 expression: assignment;
 
-assignment : conditional | IDENT '=' expression;
+assignment : conditional | unary '=' expression;
 
 conditional: logical_or | logical_or '?' expression ':' conditional;
 
@@ -45,7 +45,10 @@ additive: multiplicative | additive ('+'|'-') multiplicative;
 
 multiplicative: unary | multiplicative ('*'|'/'|'%') unary;
 
-unary: postfix | ('-'|'!'|'~') unary;
+unary:
+	('-' | '~' | '!' | '&' | '*') unary	# operatorUnary
+	| '(' type ')' unary # castUnary
+	| postfix # postfixUnary;
 
 postfix: primary | IDENT '(' (expression (',' expression)*)? ')';
 

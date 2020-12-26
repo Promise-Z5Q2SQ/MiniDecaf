@@ -33,7 +33,7 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
                 stringBuilder.append("\t.comm "). // 未初始化的全局变量在 bss 段中
                         append(global).append(", ").append(declaredGlobalTable.get(global).getSize()).append(", 4\n"); // 对齐字节数为 4
             }
-        if (!containsMain) reportError("no main function", ctx);
+        if (!containsMain) reportError("no main function found", ctx);
         return new Type.NoType();
     }
 
@@ -54,7 +54,7 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
             paramTypes.add(visit(ctx.type(i)));
         FunctionType functionType = new FunctionType(returnType, paramTypes);
         if (declaredFunctionTable.get(currentFunction) != null && !declaredFunctionTable.get(currentFunction).equals(functionType))
-            reportError("the number of parameters of the defined function is not the same as declared", ctx);
+            reportError("the signature of the defined function is not the same as it is declared", ctx);
         declaredFunctionTable.put(currentFunction, functionType);
         definedFunctionTable.put(currentFunction, functionType);
 
@@ -73,9 +73,11 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
             if (i < 9) { // 前8个参数使用寄存器 a0-a7 储存
                 localCount++;
                 stringBuilder.append("\tsw a").append(i - 1).append(", ").append(-4 * i).append("(fp)\n");
-                symbolTable.peek().put(parameterName, new Symbol(parameterName, -4 * i, functionType.parameterTypes.get(i - 1)));
+                symbolTable.peek().put(parameterName, new Symbol(parameterName, -4 * i,
+                        functionType.parameterTypes.get(i - 1).valueCast(ValueKind.LVALUE)));
             } else { // 剩余参数位于内存中，ra 前
-                symbolTable.peek().put(parameterName, new Symbol(parameterName, 4 * (i - 9 + 2), functionType.parameterTypes.get(i - 1)));
+                symbolTable.peek().put(parameterName, new Symbol(parameterName, 4 * (i - 9 + 2),
+                        functionType.parameterTypes.get(i - 1).valueCast(ValueKind.LVALUE)));
             }
         }
         visit(ctx.compound_statement()); // 函数体
@@ -111,8 +113,12 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
 
     @Override
     public Type visitType(MiniDecafParser.TypeContext ctx) {
-        if (!ctx.getText().equals("int")) reportError("class error", ctx);
-        return new Type.IntType();
+        int starNum = ctx.children.size() - 1;
+        if (starNum == 0) {
+            if (!ctx.children.get(0).getText().equals("int")) reportError("class error", ctx);
+            return new Type.IntType();
+        } else
+            return new Type.PointerType(starNum);
     }
 
     @Override
@@ -124,14 +130,16 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
 
     @Override
     public Type visitDeclaration(MiniDecafParser.DeclarationContext ctx) {
-        visit(ctx.type());
+        Type type = visit(ctx.type());
         String name = ctx.IDENT().getText();
         if (symbolTable.peek().get(name) != null) // 若重复声明则报错
             reportError("try declaring a declared variable", ctx);
-        symbolTable.peek().put(name, new Symbol(name, -4 * ++localCount, new Type.IntType()));// 否则加入符号表
+        symbolTable.peek().put(name, new Symbol(name, -4 * ++localCount, type.valueCast(ValueKind.LVALUE)));// 否则加入符号表
         var expr = ctx.expression();
         if (expr != null) {
-            visit(expr);
+            Type exprType = castToRValue(visit(expr), ctx);
+            if (!exprType.equals(type))
+                reportError("initialize value of type " + exprType + " to some variable of type " + type, ctx);
             stackPop("t0");
             stringBuilder.append("\tsw t0, ").append(-4 * localCount).append("(fp)\n");
         }
@@ -147,13 +155,13 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
         Type type = visit(ctx.type());
         if (declaredGlobalTable.get(name) != null && !declaredGlobalTable.get(name).equals(type))
             reportError("different global variables with same name are declared", ctx);
-        declaredGlobalTable.put(name, type);
+        declaredGlobalTable.put(name, type.valueCast(ValueKind.LVALUE));
 
         var num = ctx.NUM();
         if (num != null) {
             if (initializedGlobalTable.get(name) != null)
                 reportError("initialize a global variable twice", ctx);
-            initializedGlobalTable.put(name, type);
+            initializedGlobalTable.put(name, type.valueCast(ValueKind.RVALUE));
             stringBuilder.append("\t.data\n") // 全局变量要放在 data 段中
                     .append("\t.align 4\n").append(name).append(":\n").append("\t.word ").append(num.getText()).append("\n");
         }
@@ -162,7 +170,10 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
 
     @Override
     public Type visitReturnStatement(MiniDecafParser.ReturnStatementContext ctx) {
-        visit(ctx.expression());
+        Type returnType = castToRValue(visit(ctx.expression()), ctx);
+        Type expectedType = definedFunctionTable.get(currentFunction).returnType;
+        if (!expectedType.equals(returnType))
+            reportError("return type " + returnType + " is inconsistent with expected return type " + expectedType, ctx);
         stringBuilder.append("\tj .exit.").append(currentFunction).append("\n");
         return new Type.NoType();
     }
@@ -180,7 +191,7 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
     @Override
     public Type visitIfStatement(MiniDecafParser.IfStatementContext ctx) {
         int currentCondNo = condCount++;
-        visit(ctx.expression());
+        typeCheck(visit(ctx.expression()), Type.IntType.class, ctx);
         stackPop("t0");
         stringBuilder.append("\tbeqz t0, .else").append(currentCondNo).append("\n"); // 根据条件表达式的值判断是否要直接跳转至 else 分支
         visit(ctx.statement(0));
@@ -225,7 +236,7 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
         }
         stringBuilder.append(".beforeLoop").append(currentLoop).append(":\n");
         if (ctrl != null) {
-            visit(ctrl);
+            typeCheck(visit(ctrl), Type.IntType.class, ctx);
             stringBuilder.append("\tlw t1, 0(sp)\n").append("\taddi sp, sp, 4\n").append("\tbeqz t1, .afterLoop").append(currentLoop).append("\n");
         }
         this.currentLoop.push(currentLoop);
@@ -249,7 +260,7 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
         int currentLoop = loopCount++;
         stringBuilder.append(".beforeLoop").append(currentLoop).append(":\n").
                 append(".continueLoop").append(currentLoop).append(":\n"); // continue 指令需要跳转到这里
-        visit(ctx.expression());
+        typeCheck(visit(ctx.expression()), Type.IntType.class, ctx);
         stackPop("t0");
         stringBuilder.append("\tbeqz t0, .afterLoop").append(currentLoop).append("\n");
         this.currentLoop.push(currentLoop);
@@ -268,7 +279,7 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
         visit(ctx.statement()); // 访问循环体
         this.currentLoop.pop();
         stringBuilder.append(".continueLoop").append(currentLoop).append(":\n"); // continue 指令需要跳转到这里
-        visit(ctx.expression());
+        typeCheck(visit(ctx.expression()), Type.IntType.class, ctx);
         stackPop("t0");
         stringBuilder.append("\tbnez t0, .beforeLoop").append(currentLoop).append("\n").
                 append(".afterLoop").append(currentLoop).append(":\n");
@@ -299,25 +310,34 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
     @Override
     public Type visitAssignment(MiniDecafParser.AssignmentContext ctx) {
         if (ctx.children.size() > 1) {
-            String name = ctx.IDENT().getText();
-            Optional<Symbol> optionSymbol = lookupSymbol(name);
-            visit(ctx.expression());
-            if (optionSymbol.isPresent()) {
-                Symbol symbol = optionSymbol.get();
-                stackPop("t0");
-                stringBuilder.append("\tsw t0, ").append(symbol.offset).append("(fp)\n");
-                stackPush("t0");
-                return symbol.type;
-            } else if (declaredGlobalTable.get(name) != null) {
-                stackPop("t0");
-                stringBuilder.append("\tlui t1, %hi(").append(name).append(")\n"); // 读出全局变量地址的高 20 位
-                stringBuilder.append("\tsw t0, %lo(").append(name).append(")(t1)\n"); // 读出全局变量地址的低 12 位
-                stackPush("t0");
-                return declaredGlobalTable.get(name);
-            } else {
-                reportError("use variable that is not defined", ctx);
-                return new Type.NoType();
-            }
+            Type unaryType = typeCheck(visit(ctx.unary()), Type.class, ValueKind.LVALUE, ctx);
+            Type exprType = castToRValue(visit(ctx.expression()), ctx);
+            if (!exprType.equals(unaryType.valueCast(ValueKind.RVALUE)))
+                reportError("assign value of type " + exprType + " to some variable of type " + unaryType, ctx);
+            stackPop("t1");
+            stackPop("t0");
+            stringBuilder.append("\tsw t1, 0(t0)\n");
+            stackPush("t0");
+            return unaryType;
+//            String name = ctx.IDENT().getText();
+//            Optional<Symbol> optionSymbol = lookupSymbol(name);
+//            visit(ctx.expression());
+//            if (optionSymbol.isPresent()) {
+//                Symbol symbol = optionSymbol.get();
+//                stackPop("t0");
+//                stringBuilder.append("\tsw t0, ").append(symbol.offset).append("(fp)\n");
+//                stackPush("t0");
+//                return symbol.type;
+//            } else if (declaredGlobalTable.get(name) != null) {
+//                stackPop("t0");
+//                stringBuilder.append("\tlui t1, %hi(").append(name).append(")\n"); // 读出全局变量地址的高 20 位
+//                stringBuilder.append("\tsw t0, %lo(").append(name).append(")(t1)\n"); // 读出全局变量地址的低 12 位
+//                stackPush("t0");
+//                return declaredGlobalTable.get(name);
+//            } else {
+//                reportError("use variable that is not defined", ctx);
+//                return new Type.NoType();
+//            }
         } else {
             return visit(ctx.conditional());
         }
@@ -327,15 +347,17 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
     public Type visitConditional(MiniDecafParser.ConditionalContext ctx) {
         if (ctx.children.size() > 1) {
             int currentCondNo = condCount++;
-            visit(ctx.logical_or());
+            typeCheck(visit(ctx.logical_or()), Type.IntType.class, ctx);
             stackPop("t0");
             stringBuilder.append("\tbeqz t0, .else").append(currentCondNo).append("\n"); // 根据条件表达式判断是否要跳转至 else 分支
-            visit(ctx.expression());
+            Type thenType = castToRValue(visit(ctx.expression()), ctx);
             stringBuilder.append("\tj .afterCondition").append(currentCondNo).append("\n"); // 在 then 分支结束后直接跳至分支语句末尾
             stringBuilder.append(".else").append(currentCondNo).append(":\n"); // 在 else 分支结束后直接跳至分支语句末尾
-            visit(ctx.conditional());
+            Type elseType = castToRValue(visit(ctx.conditional()), ctx);
             stringBuilder.append(".afterCondition").append(currentCondNo).append(":\n");
-            return new Type.IntType();
+            if (!thenType.equals(elseType))
+                reportError("different types of branches of a ternary", ctx);
+            return thenType;
         } else {
             return visit(ctx.logical_or());
         }
@@ -344,8 +366,8 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
     @Override
     public Type visitLogical_or(MiniDecafParser.Logical_orContext ctx) {
         if (ctx.children.size() > 1) {
-            visit(ctx.logical_or());
-            visit(ctx.logical_and());
+            typeCheck(visit(ctx.logical_or()), Type.IntType.class, ctx);
+            typeCheck(visit(ctx.logical_and()), Type.IntType.class, ctx);
             stackPop("t1");
             stackPop("t0");
             stringBuilder.append("\tsnez t0, t0\n").append("\tsnez t1, t1\n").append("\tor t0, t0, t1\n");
@@ -359,8 +381,8 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
     @Override
     public Type visitLogical_and(MiniDecafParser.Logical_andContext ctx) {
         if (ctx.children.size() > 1) {
-            visit(ctx.logical_and());
-            visit(ctx.equality());
+            typeCheck(visit(ctx.logical_and()), Type.IntType.class, ctx);
+            typeCheck(visit(ctx.equality()), Type.IntType.class, ctx);
             stackPop("t1");
             stackPop("t0");
             stringBuilder.append("\tsnez t0, t0\n").append("\tsnez t1, t1\n").append("\tand t0, t0, t1\n");
@@ -374,8 +396,11 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
     @Override
     public Type visitEquality(MiniDecafParser.EqualityContext ctx) {
         if (ctx.children.size() > 1) {
-            visit(ctx.equality());
-            visit(ctx.relational());
+            Type leftType = castToRValue(visit(ctx.equality()), ctx);
+            Type rightType = castToRValue(visit(ctx.relational()), ctx);
+            if (!leftType.equals(rightType)) {
+                reportError("the types of the both sides of \"==\"/\"!=\" must be same", ctx);
+            }
             stackPop("t1");
             stackPop("t0");
             switch (ctx.children.get(1).getText()) {
@@ -392,8 +417,8 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
     @Override
     public Type visitRelational(MiniDecafParser.RelationalContext ctx) {
         if (ctx.children.size() > 1) {
-            visit(ctx.relational());
-            visit(ctx.additive());
+            typeCheck(visit(ctx.relational()), Type.IntType.class, ctx);
+            typeCheck(visit(ctx.additive()), Type.IntType.class, ctx);
             stackPop("t1");
             stackPop("t0");
             switch (ctx.children.get(1).getText()) {
@@ -412,14 +437,48 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
     @Override
     public Type visitAdditive(MiniDecafParser.AdditiveContext ctx) {
         if (ctx.children.size() > 1) {
-            visit(ctx.additive());
-            visit(ctx.multiplicative());
+            Type leftType = castToRValue(visit(ctx.additive()), ctx);
+            Type rightType = castToRValue(visit(ctx.multiplicative()), ctx);
             // 将加法和减法的操作数存入寄存器
             stackPop("t1");
             stackPop("t0");
             switch (ctx.children.get(1).getText()) {
-                case "+" -> stringBuilder.append("\tadd t0, t0, t1\n");
-                case "-" -> stringBuilder.append("\tsub t0, t0, t1\n");
+                case "+" -> {
+                    if (leftType instanceof Type.IntType && rightType instanceof Type.IntType) {
+                        stringBuilder.append("\tadd t0, t0, t1\n");
+                        stackPush("t0");
+                        return new Type.IntType();
+                    } else if (leftType instanceof Type.PointerType && rightType instanceof Type.IntType) {
+                        stringBuilder.append("\tslli t1, t1, 2\n").append("\tadd t0, t0, t1\n");
+                        stackPush("t0");
+                        return leftType;
+                    } else if (leftType instanceof Type.IntType && rightType instanceof Type.PointerType) {
+                        stringBuilder.append("\tslli t0, t0, 2\n").append("\tadd t0, t0, t1\n");
+                        stackPush("t0");
+                        return rightType;
+                    } else {
+                        reportError("only the followings are legal for addition operation: 1. pointer + integer 2. integer + pointer 3. integer + integer", ctx);
+                        return new Type.NoType();
+                    }
+                }
+                case "-" -> {
+                    if (leftType instanceof Type.IntType && rightType instanceof Type.IntType) {
+                        stringBuilder.append("\tsub t0, t0, t1\n");
+                        stackPush("t0");
+                        return new Type.IntType();
+                    } else if (leftType instanceof Type.PointerType && rightType instanceof Type.IntType) {
+                        stringBuilder.append("\tslli t1, t1, 2\n").append("\tsub t0, t0, t1\n");
+                        stackPush("t0");
+                        return leftType;
+                    } else if (leftType instanceof Type.PointerType && rightType.equals(leftType)) {
+                        stringBuilder.append("\tsub t0, t0, t1\n").append("\tsrai t0, t0, 2\n");
+                        stackPush("t0");
+                        return new Type.IntType();
+                    } else {
+                        reportError("only the followings are legal for subtraction operation: 1. pointer - integer 2. integer - integer", ctx);
+                        return new Type.NoType();
+                    }
+                }
             }
             // 将运算结果存回栈中
             stackPush("t0");
@@ -433,8 +492,8 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
     public Type visitMultiplicative(MiniDecafParser.MultiplicativeContext ctx) {
         // 与加减操作基本相同
         if (ctx.children.size() > 1) {
-            visit(ctx.multiplicative());
-            visit(ctx.unary());
+            typeCheck(visit(ctx.multiplicative()), Type.IntType.class, ctx);
+            typeCheck(visit(ctx.unary()), Type.IntType.class, ctx);
             stackPop("t1");
             stackPop("t0");
             switch (ctx.children.get(1).getText()) {
@@ -450,20 +509,37 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
     }
 
     @Override
-    public Type visitUnary(MiniDecafParser.UnaryContext ctx) {
-        if (ctx.children.size() > 1) {
-            visit(ctx.unary()); //递归循环
+    public Type visitOperatorUnary(MiniDecafParser.OperatorUnaryContext ctx) {
+        Type type = visit(ctx.unary()); //递归循环
+        String op = ctx.children.get(0).getText();
+        if (op.equals("*")) {
+            return castToRValue(type, ctx).dereferenced();
+        }
+        if (op.equals("&")) {
+            return type.referenced();
+        } else {
+            typeCheck(type, Type.IntType.class, ctx);
             stackPop("t0");
-            switch (ctx.children.get(0).getText()) {
+            switch (op) {
                 case "-" -> stringBuilder.append("\tneg t0, t0\n");
                 case "~" -> stringBuilder.append("\tnot t0, t0\n");
                 case "!" -> stringBuilder.append("\tseqz t0, t0\n");
             }
             stackPush("t0");
             return new Type.IntType();
-        } else {
-            return visit(ctx.postfix());
         }
+    }
+
+    @Override
+    public Type visitCastUnary(MiniDecafParser.CastUnaryContext ctx) {
+        Type srcType = visit(ctx.unary());
+        Type dstType = visit(ctx.type());
+        return dstType.valueCast(srcType.valueKind);
+    }
+
+    @Override
+    public Type visitPostfixUnary(MiniDecafParser.PostfixUnaryContext ctx) {
+        return visit(ctx.postfix());
     }
 
     @Override
@@ -477,12 +553,14 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
                 reportError("parameters matching error", ctx);
             // 这里参数的调用方式遵循 riscv gcc 的调用约定
             for (int i = ctx.expression().size() - 1; i >= 0; i--) {
-                visit(ctx.expression().get(i));
+                Type type = castToRValue(visit(ctx.expression().get(i)), ctx);
+                if (!type.equals(functionType.parameterTypes.get(i)))
+                    reportError("the type of argument " + i + " is different from the type of parameter " + i + " of function " + functionName, ctx);
                 if (i < 8) stackPop("a" + i); // 前8个参数使用寄存器 a0-a7 传递，其余直接存在内存中
             }
             stringBuilder.append("\tcall ").append(functionName).append("\n"); // 调用函数
             stackPush("a0"); // 函数的返回值存储在a0中
-            return new Type.IntType();
+            return functionType.returnType;
         } else {
             return visit(ctx.primary());
         }
@@ -512,15 +590,15 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
         Optional<Symbol> optionSymbol = lookupSymbol(name);
         if (optionSymbol.isPresent()) {
             Symbol symbol = optionSymbol.get();
-            stringBuilder.append("\tlw t0, ").append(symbol.offset).append("(fp)\n");
+            stringBuilder.append("\taddi t0, fp, ").append(symbol.offset).append("\n");
             stackPush("t0");
             return symbol.type;
         } else if (declaredGlobalTable.get(name) != null) { // 全局变量
-            stringBuilder.append("\tlui t1, %hi(").append(name).append(")\n") // 读出全局变量地址的高 20 位
-                    .append("\tlw t0, %lo(").append(name).append(")(t1)\n"); // 读出全局变量地址的低 12 位
+            stringBuilder.append("\tlui t0, %hi(").append(name).append(")\n") // 读出全局变量地址的高 20 位
+                    .append("\taddi t0, t0, %lo(").append(name).append(")\n"); // 读出全局变量地址的低 12 位
             stackPush("t0");
             return declaredGlobalTable.get(name);
-        }  else {
+        } else {
             reportError("use variable that is not defined", ctx);
             return new Type.IntType();
         }
@@ -570,5 +648,37 @@ public final class MainVisitor extends MiniDecafBaseVisitor<Type> {
                 return Optional.of(map.get(v));
         }
         return Optional.empty();
+    }
+
+    /**
+     * 类型和值类别的转换，转换时检查是否可行。
+     *
+     * @param actualType     转换前的实际类型
+     * @param expectedType   期望被转换到的类型
+     * @param neededValueCat 所需的值类别
+     * @return 转换后的结果类型
+     */
+    private Type typeCheck(Type actualType, Class<?> expectedType, ValueKind neededValueCat, ParserRuleContext ctx) {
+        if (!expectedType.isAssignableFrom(actualType.getClass()))
+            reportError("type " + actualType + " appears, but " + expectedType.getName() + " is expected", ctx);
+        if (neededValueCat == ValueKind.LVALUE && actualType.valueKind == ValueKind.RVALUE)
+            reportError("an lvalue is needed here", ctx);
+        if (neededValueCat == ValueKind.RVALUE && actualType.valueKind == ValueKind.LVALUE) {
+            stackPop("t0");
+            stringBuilder.append("\tlw t0, 0(t0)\n");
+            stackPush("t0");
+            return actualType.valueCast(ValueKind.RVALUE);
+        }
+        return actualType.valueCast(neededValueCat);
+    }
+
+    // 缺省值类别，默认为右值
+    private Type typeCheck(Type actualType, Class<?> expectedType, ParserRuleContext ctx) {
+        return typeCheck(actualType, expectedType, ValueKind.RVALUE, ctx);
+    }
+
+    // 不作类型转换，仅仅要求右值
+    private Type castToRValue(Type actualType, ParserRuleContext ctx) {
+        return typeCheck(actualType, Type.class, ValueKind.RVALUE, ctx);
     }
 }
